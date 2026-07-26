@@ -1,0 +1,278 @@
+Step 1: Design (RTL)
+
+Create rtl/siso.v
+
+module siso(
+    input clk,
+    input rst,
+    input serial_in,
+    output serial_out
+);
+
+reg [3:0] shift_reg;
+
+always @(posedge clk or posedge rst)
+begin
+    if(rst)
+        shift_reg <= 4'b0000;
+    else
+        shift_reg <= {shift_reg[2:0], serial_in};
+end
+
+assign serial_out = shift_reg[3];
+
+endmodule
+Function
+4-bit Serial-In Serial-Out shift register.
+On every rising clock edge:
+Existing bits shift left.
+New bit enters at LSB.
+MSB becomes the serial output.
+Reset clears the register.
+Step 2: Interface
+
+Create verification/siso_if.sv
+
+interface siso_if(input logic clk);
+
+logic rst;
+logic serial_in;
+logic serial_out;
+
+endinterface
+Purpose
+
+The interface groups all DUT signals together so the driver and monitor can access them through a virtual interface.
+
+Step 3: Transaction Class
+
+Create verification/transaction.sv
+
+class transaction;
+
+rand bit serial_in;
+
+bit serial_out;
+
+function void display();
+
+$display("--------------------------------");
+$display("Serial Input  = %0b",serial_in);
+$display("Serial Output = %0b",serial_out);
+$display("--------------------------------");
+
+endfunction
+
+endclass
+Purpose
+
+A transaction represents one piece of data transferred to or from the DUT.
+
+In the next message, I'll provide:
+
+Step 4: Generator (generator.sv)
+Step 5: Driver (driver.sv)
+
+These components will generate random input bits and drive them into the SISO DUT.
+
+yes
+
+Great! Let's continue.
+
+Step 4: Generator (generator.sv)
+
+The generator creates random serial input bits and sends them to the driver through a mailbox.
+
+class generator;
+
+  mailbox gen2drv;
+
+  function new(mailbox gen2drv);
+    this.gen2drv = gen2drv;
+  endfunction
+
+  task run();
+
+    transaction tr;
+
+    repeat(20)
+    begin
+      tr = new();
+
+      assert(tr.randomize());
+
+      $display("\nGenerator Generated Bit = %0b", tr.serial_in);
+
+      gen2drv.put(tr);
+
+      #10;
+    end
+
+  endtask
+
+endclass
+Purpose
+Generates random 0s and 1s.
+Creates 20 transactions.
+Sends each transaction to the driver using a mailbox.
+Step 5: Driver (driver.sv)
+
+The driver receives transactions from the generator and applies them to the DUT.
+
+class driver;
+
+  virtual siso_if vif;
+  mailbox gen2drv;
+
+  function new(mailbox gen2drv,
+               virtual siso_if vif);
+
+    this.gen2drv = gen2drv;
+    this.vif = vif;
+
+  endfunction
+
+
+  task run();
+
+    transaction tr;
+
+    forever
+    begin
+
+      gen2drv.get(tr);
+
+      @(posedge vif.clk);
+
+      vif.serial_in <= tr.serial_in;
+
+      $display("Driver Applied Bit = %0b",
+               tr.serial_in);
+
+    end
+
+  endtask
+
+endclass
+Purpose
+Receives one transaction at a time.
+Waits for the positive clock edge.
+Drives the serial input bit to the DUT.
+Verification Flow So Far
+Generator
+     |
+     | (Mailbox)
+     v
+Driver
+     |
+     | serial_in
+     v
++----------------+
+|   SISO DUT     |
++----------------+
+Files Completed
+✅ siso.v
+✅ siso_if.sv
+✅ transaction.sv
+✅ generator.sv
+✅ driver.sv
+Next (Step 6 & 7)
+
+In the next message, we'll create:
+
+Monitor (monitor.sv) – captures the DUT output.
+Scoreboard (scoreboard.sv) – checks whether the DUT output matches the expected output and reports PASS or FAIL. These are the key components that make the verification environment self-checking.
+test and top test
+
+Below are the Test and Top Testbench files for the SISO verification environment.
+
+8. Test (test.sv)
+class test;
+
+    environment env;
+
+    function new(virtual siso_if vif);
+
+        env = new(vif);
+
+    endfunction
+
+    task run();
+
+        $display("-------------------------------------");
+        $display("Starting SISO Verification");
+        $display("-------------------------------------");
+
+        fork
+            env.run();
+        join_none
+
+        #300;
+
+        $display("-------------------------------------");
+        $display("Verification Completed");
+        $display("-------------------------------------");
+
+        $finish;
+
+    endtask
+
+endclass
+Purpose
+Creates the verification environment.
+Starts the simulation.
+Runs all verification components.
+Stops the simulation after a fixed time.
+9. Top Testbench (tb_top.sv)
+`timescale 1ns/1ps
+
+module tb_top;
+
+logic clk;
+
+// Clock Generation
+always #5 clk = ~clk;
+
+// Interface
+siso_if vif(clk);
+
+// DUT Instantiation
+siso dut(
+    .clk(clk),
+    .rst(vif.rst),
+    .serial_in(vif.serial_in),
+    .serial_out(vif.serial_out)
+);
+
+// Test Handle
+test t;
+
+initial
+begin
+
+    clk = 0;
+
+    // Apply Reset
+    vif.rst = 1;
+    vif.serial_in = 0;
+
+    #20;
+
+    vif.rst = 0;
+
+    // Create Test
+    t = new(vif);
+
+    // Start Verification
+    t.run();
+
+end
+
+// Waveform Dump
+initial
+begin
+    $dumpfile("siso.vcd");
+    $dumpvars(0, tb_top);
+end
+
+endmodule
